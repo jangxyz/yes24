@@ -3,7 +3,14 @@
 import getpass
 import urllib, urllib2, cookielib
 from BeautifulSoup import BeautifulSoup
-import re
+from datetime import datetime
+import sys, re
+import logging
+
+if '-d' in sys.argv:
+    logging.basicConfig(level=logging.DEBUG)
+
+target_month=datetime.now().strftime("%Y.%m")
 
 default_url = "http://www.yes24.com/"
 secure_url  = "https://www.yes24.com/"
@@ -12,14 +19,26 @@ order_path  = "/Member/FTMyOrderList01.aspx"
 order_url   = secure_url + order_path
 order_detail_url = "https://www.yes24.com/Member/FTMyOrderDtl01.aspx"
 
-def authorize():
-    username = raw_input('Username: ')
-    password = getpass.getpass()
-    login_data = "FBLoginSub%3ALoginType=&FBLoginSub%3AReturnURL=&FBLoginSub%3AReturnParams=&RefererUrl=http%3A%2F%2Fwww.yes24.com%2FMain%2FDefault.aspx&AutoLogin=1&LoginIDSave=N&SMemberID=" + username + "&SMemberPassword=" + password + ""
-    
+login_data = {
+    "SMemberID"              : None,
+    "SMemberPassword"        : None,
+    "RefererUrl"             : "http://www.yes24.com/Main/Default.aspx",
+    "AutoLogin"              : "1",
+    "LoginIDSave"            : "N",
+    "FBLoginSub:LoginType"   : '',
+    "FBLoginSub:ReturnURL"   : '',
+    "FBLoginSub:ReturnParams": '',
+}
+
+
+def authorize(username, password):
     cj = cookielib.CookieJar()
     opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cj))
-    resp = opener.open(login_url, login_data)
+
+    login_data['SMemberID'] = username
+    login_data['SMemberPassword'] = password
+
+    resp = opener.open(login_url, urllib.urlencode(login_data))
     html = resp.read()
     if 'location.replace' not in html:
         return None
@@ -28,7 +47,10 @@ def authorize():
 
 
 def open_url(url):
-    return opener.open(url).read().decode('cp949')
+    logging.debug("openening url: " + url)
+    site = opener.open(url)
+    text = site.read()
+    return text.decode('cp949')
 
 
 def test_login(html):
@@ -127,43 +149,45 @@ def parse_order_detail_page(text):
     print ' *',
     if len(discounts) > 0:
         if money_spent != u'0':
-            print "%s원(%s %s원" % (order_price, payment_method, money_spent), 
+            print u"%s원(%s %s원" % (order_price, payment_method, money_spent), 
         else:
-            print "%s원(%s원" % (order_price, money_spent), 
+            print u"%s원(%s원" % (order_price, money_spent), 
         for discount_by, discount_amt in discounts:
-            print "+ %s %s원"  % (str(discount_by).strip(), discount_amt),
-        print ")/ %s점 적립" % (point_saved)
+            print u"+ %s %s원"  % (discount_by.strip(), discount_amt),
+        print u")/ %s점 적립" % (point_saved)
     else:
-        print "%s원 / %s점 적립" % (order_price, point_saved)
+        print u"%s원 / %s점 적립" % (order_price, point_saved)
     return order_price, point_saved, payment_method, money_spent, discounts
 
 
 # login
-opener = authorize()
+username = raw_input('Username: ')
+password = getpass.getpass()
+opener = authorize(username, password)
+del username, password
 
 # orders
-target_month="2009.09"
 orders = []
 path = order_path
 while True:
     text = open_url(secure_url + path)
-    _orders, (page_no, path) = parse_order_page(text)
-    if len(_orders) == 0 or path is None:
+    partial_orders, (page_no, path) = parse_order_page(text)
+    if len(partial_orders) == 0 or path is None:
         break
-    orders.extend(_orders)
+    logging.debug('%d orders for page %s' % (len(partial_orders), page_no))
+    orders.extend(partial_orders)
+logging.info(len(orders), 'orders')
 
 earliest_date = min(order[1] for order in orders)
 latest_date   = max(order[1] for order in orders)
 prices_sum    = sum(int(order[2].replace(",", '')) for order in orders)
 pkg_count     = sum(int(order[3]) for order in orders)
 import locale; locale.setlocale(locale.LC_ALL, '')
-print "%s ~ %s 동안 %d번 주문: 총 %d개, %s원" % (earliest_date, latest_date, len(orders), pkg_count, locale.format("%d", prices_sum, True))
+print u"%s ~ %s 동안 %d번 주문: 총 %d개, %s원" % (earliest_date, latest_date, len(orders), pkg_count, locale.format("%d", prices_sum, True))
 
 # order details
-i = 23
-order = orders[i]
 for i,order in enumerate(orders):
-#if True:
     text = open_url(get_order_detail_link(order[0]))
     parse_order_detail_page(text)
+
 
