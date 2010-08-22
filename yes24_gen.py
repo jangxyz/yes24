@@ -5,7 +5,7 @@ import logging
 import sys, datetime
 import locale; locale.setlocale(locale.LC_ALL, '')
 
-from yes24 import Yes24, OrderListPage, OrderPage
+from yes24 import Yes24, OrderListPage, Order
 
 if '--debug' in sys.argv:
     logging.basicConfig(level=logging.DEBUG)
@@ -25,19 +25,19 @@ orders = OrderListPage.retrieve_orders(opener, target_month=target_month)
 
 # summary -- evaluate orders
 orders = list(orders)
-earliest_date = min(order[1] for order in orders)
-latest_date   = max(order[1] for order in orders)
-price_sum    = sum(int(order[2].replace(",", '')) for order in orders)
-pkg_count     = sum(int(order[3]) for order in orders)
+earliest_date = min(order.order_date for order in orders)
+latest_date   = max(order.order_date for order in orders)
+price_sum     = sum(int(order.price.replace(",", '')) for order in orders)
+pkg_count     = sum(int(order.count) for order in orders)
 print u"%s ~ %s 동안 %d번 주문: 총 %s개, %s원" % \
     (earliest_date, latest_date, len(orders), pkg_count, price_sum )
     #(earliest_date, latest_date, len(orders), pkg_count, locale.format("%d", price_sum, True))
 
 # order detail page
-order_ids   = (order[0] for order in orders)
+order_ids   = (order.id for order in orders)
 order_urls  = (Yes24.get_order_detail_link(order_id) for order_id in order_ids)
 order_pages = (Yes24.open_url(opener, url) for url  in order_urls)
-results     = (OrderPage.parse(text) for text in order_pages)
+results     = (Order.PageParse.parse(text) for text in order_pages)
 
 for order_price, point_saved, payment_method, money_spent, discounts in results:
     print ' *',

@@ -72,7 +72,6 @@ class Yes24:
 
 
 class OrderListPage:
-
     @staticmethod
     # generator
     def retrieve_order_list_pages(opener, path):
@@ -98,6 +97,7 @@ class OrderListPage:
 
             for order in orders:
                 yield order
+
 
     class Parse:
         ''' class (more like a namespace) holding methods to help parsing '''
@@ -157,40 +157,78 @@ class OrderListPage:
             order_list_table  = soup.table(id="MyOrderListTbl")[0]
             remove_bogus_rows = lambda tag: tag.name == u'tr' and len(tag.findAll('td')) != 1
             for tr in order_list_table.find('tr').findNextSiblings(remove_bogus_rows):
-                order = OrderListPage.Parse.single_order(tr, target_month)
+                #order = OrderListPage.Parse.single_order(tr, target_month)
+                order = Order.build_from_order_list_page(tr, target_month)
                 if order is None:
                     continue
                 orders.append( order )
             logging.debug("%d orders total." % len(orders))
             return orders
 
-        @staticmethod
-        def single_order(tr, target_month):
-            ''' parse and return (order_id, order_date, order_price, pkg_num, order_name) 
-            from single table row in order list page
-            
-            returns None if order_date != target_date
-            '''
-            remove_bogus_cell = lambda tag: tag.name == u'td' and tag['width'] != u'1'
-            tds = tr.findAll(remove_bogus_cell)
-            order_id    = tds[0].b.string
-            order_date  = tds[1].string
-            order_name  = tds[2].span.string
-            order_price = tds[3].b.string
-            pkg_num     = tds[3].b.string.next.rsplit('/')[-1]
+        #@staticmethod
+        #def single_order(tr, target_month):
+        #    ''' parse and return Order instance from single table row in order list page
+        #    
+        #    returns None if order_date != target_date
+        #    '''
 
-            # check target month
-            if target_month is not None:
-                if not str(order_date).startswith(target_month):
-                    return None
+        #    order = Order()
+
+        #    remove_bogus_cell = lambda tag: tag.name == u'td' and tag['width'] != u'1'
+        #    tds = tr.findAll(remove_bogus_cell)
+        #    order.id    = tds[0].b.string
+        #    order.order_date  = tds[1].string
+        #    order.title = tds[2].span.string
+        #    order.price = tds[3].b.string
+        #    order.count = tds[3].b.string.next.rsplit('/')[-1]
+
+        #    # check target month
+        #    if target_month is not None:
+        #        if not str(order.order_date).startswith(target_month):
+        #            return None
+        #
+        #    #logging.debug("#%(order_id)s - \"%(order_name)s\""  % locals())
+        #    return order
+        #    #return (order_id, order_date, order_price, pkg_num, order_name)
+
+class Order:
+    def __init__(self):
+        self.id = None
+        self.order_date = None
+        self.price = None
+        self.count = None
+        self.title = None
+
+        self.payment = Payment()
+
+    @classmethod
+    def build_from_order_list_page(cls, tr, target_month):
+        ''' parse and return Order instance from single table row in order list page
         
-            #logging.debug("#%(order_id)s - \"%(order_name)s\""  % locals())
-            return (order_id, order_date, order_price, pkg_num, order_name)
+        returns None if order_date != target_date
+        '''
 
-class OrderPage:
+        order = Order()
 
-    class Parse:
+        remove_bogus_cell = lambda tag: tag.name == u'td' and tag['width'] != u'1'
+        tds = tr.findAll(remove_bogus_cell)
+        order.id    = tds[0].b.string
+        order.order_date  = tds[1].string
+        order.title = tds[2].span.string
+        order.price = tds[3].b.string
+        order.count = tds[3].b.string.next.rsplit('/')[-1]
+
+        # check target month
+        if target_month is not None:
+            if not str(order.order_date).startswith(target_month):
+                return None
+    
+        return order
+
+
+    class PageParse:
         ''' class (more like a namespace) holding methods to help parsing '''
+        @staticmethod
         def massage(text):
             # lacks double-quote(")
             text = text.replace(
@@ -218,8 +256,8 @@ class OrderPage:
 
         @staticmethod
         def parse(text):
-            text = OrderPage.crop(text)
-            text = OrderPage.massage(text)
+            text = Order.PageParse.crop(text)
+            text = Order.PageParse.massage(text)
             soup = BeautifulSoup(text)
         
             # order price
@@ -254,4 +292,13 @@ class OrderPage:
             discounts = map(lambda td: (td.contents[-1], td.findNextSibling('td').findNextSibling('td').b.string), discounts)
         
             return order_price, point_saved, payment_method, money_spent, discounts
+
+
+class Payment:
+    def __init__(self):
+        self.price  = None
+        self.method = None
+        self.discount  = None
+        self.cash_paid = None
+        self.points_saved = None
 
