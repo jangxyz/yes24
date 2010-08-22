@@ -7,11 +7,6 @@ from datetime import datetime
 import sys, re
 import logging
 
-if '-d' in sys.argv:
-    logging.basicConfig(level=logging.DEBUG)
-
-target_month=datetime.now().strftime("%Y.%m")
-
 default_url = "http://www.yes24.com/"
 secure_url  = "https://www.yes24.com/"
 login_url   = "https://www.yes24.com/Templates/FTLogIn.aspx"
@@ -64,7 +59,7 @@ def test_login(html):
 def massage_html(text):
     return text.replace('''<a style="cursor:hand";''', '''<a style="cursor:hand"''')
 
-def parse_order_page(text):
+def parse_order_list_page(text, target_month):
     start_pattern = '''<div id="ordList"'''
     end_pattern   = '''<script language='JavaScript'>'''
     start_idx = text.find(start_pattern)
@@ -104,7 +99,6 @@ def parse_order_page(text):
         orders.append( (order_id, order_date, order_price, pkg_num, order_name) )
     return (orders, navi_info)
 
-    
 
 def get_order_detail_link(order_id):
     return order_detail_url + "?ordNoH=" + order_id
@@ -113,6 +107,7 @@ def get_deliver_state_link(order_id):
     return "http://www.yes24.com/Order/FTDelvTrcListFrame.aspx?OID="+order_id+"&TTL=L"
 
 def parse_order_detail_page(text):
+    # crop
     start_pattern = '''<span id="infoQuickDlv"'''
     end_pattern   = '''<script Language=javascript>'''
     start_idx = text.find(start_pattern)
@@ -120,23 +115,33 @@ def parse_order_detail_page(text):
     if end_idx == start_idx -1:
         raise Exception('cannot find end pattern from %s: %s' % (order_url, end_pattern))
     text = text[start_idx:end_idx]
+
     # massage
     text = text.replace('''<table cellpadding="0" cellspacing=0" border="0" >''', '''<table cellpadding="0" cellspacing="0" border="0" >''')
-    # parse
+
+    # order price
     soup = BeautifulSoup(text)
     order_price = soup.find(id="CLbTotOrdAmt").b.string
+
+    # point saved
     text = ''.join(filter(lambda x: '<span id="CLbPayPrInfo">' in x, text.split("\r\n"))).strip()
     text = '<table>' + text[text[1:].find('<')+1:-7] + '</table>'
     soup = BeautifulSoup(text)
     point_saved = soup.find(attrs={'class':"price"}).b.string
+
+    # money spent
     if soup.find(attrs={'class':"priceB"}) is not None:
         money_spent = soup.find(attrs={'class':"priceB"}).string
     else:
         money_spent = u'0'
+
+    # payment method
     if soup.find(text=re.compile(u'결제.*수단')) is not None:
         payment_method = soup.find(text=re.compile(u'결제.*수단')).parent.findNextSibling('td').next.replace("&nbsp;", '').strip()
     else:
         payment_method = None
+
+    # discounts
     find_discount = lambda tag: tag.name == u'td' and \
         tag.findNextSibling('td') and \
         tag.findNextSibling('td').findNextSibling('td') and \
@@ -160,34 +165,40 @@ def parse_order_detail_page(text):
     return order_price, point_saved, payment_method, money_spent, discounts
 
 
-# login
-username = raw_input('Username: ')
-password = getpass.getpass()
-opener = authorize(username, password)
-del username, password
-
-# orders
-orders = []
-path = order_path
-while True:
-    text = open_url(secure_url + path)
-    partial_orders, (page_no, path) = parse_order_page(text)
-    if len(partial_orders) == 0 or path is None:
-        break
-    logging.debug('%d orders for page %s' % (len(partial_orders), page_no))
-    orders.extend(partial_orders)
-logging.info(len(orders), 'orders')
-
-earliest_date = min(order[1] for order in orders)
-latest_date   = max(order[1] for order in orders)
-prices_sum    = sum(int(order[2].replace(",", '')) for order in orders)
-pkg_count     = sum(int(order[3]) for order in orders)
-import locale; locale.setlocale(locale.LC_ALL, '')
-print u"%s ~ %s 동안 %d번 주문: 총 %d개, %s원" % (earliest_date, latest_date, len(orders), pkg_count, locale.format("%d", prices_sum, True))
-
-# order details
-for i,order in enumerate(orders):
-    text = open_url(get_order_detail_link(order[0]))
-    parse_order_detail_page(text)
+if __name__ == '__main__':
+    if '-d' in sys.argv:
+        logging.basicConfig(level=logging.DEBUG)
+    
+    target_month = datetime.now().strftime("%Y.%m")
+    
+    # login
+    username = raw_input('Username: ')
+    password = getpass.getpass()
+    opener = authorize(username, password)
+    del username, password
+    
+    # orders
+    orders = []
+    path = order_path
+    while True:
+        text = open_url(secure_url + path)
+        partial_orders, (page_no, path) = parse_order_list_page(text, target_month)
+        if len(partial_orders) == 0 or path is None:
+            break
+        logging.debug('%d orders for page %s' % (len(partial_orders), page_no))
+        orders.extend(partial_orders)
+    logging.info(len(orders), 'orders')
+    
+    earliest_date = min(order[1] for order in orders)
+    latest_date   = max(order[1] for order in orders)
+    prices_sum    = sum(int(order[2].replace(",", '')) for order in orders)
+    pkg_count     = sum(int(order[3]) for order in orders)
+    import locale; locale.setlocale(locale.LC_ALL, '')
+    print u"%s ~ %s 동안 %d번 주문: 총 %d개, %s원" % (earliest_date, latest_date, len(orders), pkg_count, locale.format("%d", prices_sum, True))
+    
+    # order details
+    for i,order in enumerate(orders):
+        text = open_url(get_order_detail_link(order[0]))
+        parse_order_detail_page(text)
 
 
