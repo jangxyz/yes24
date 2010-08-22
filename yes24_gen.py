@@ -27,29 +27,31 @@ orders = OrderListPage.retrieve_orders(opener, target_month=target_month)
 orders = list(orders)
 earliest_date = min(order.order_date for order in orders)
 latest_date   = max(order.order_date for order in orders)
-price_sum     = sum(int(order.price.replace(",", '')) for order in orders)
-pkg_count     = sum(int(order.count) for order in orders)
+price_sum     = sum(order.price for order in orders)
+pkg_count     = sum(order.count for order in orders)
 print u"%s ~ %s 동안 %d번 주문: 총 %s개, %s원" % \
-    (earliest_date, latest_date, len(orders), pkg_count, price_sum )
-    #(earliest_date, latest_date, len(orders), pkg_count, locale.format("%d", price_sum, True))
+    (earliest_date, latest_date, len(orders), pkg_count, locale.format("%d", price_sum, True))
 
 # order detail page
-order_ids   = (order.id for order in orders)
-order_urls  = (Yes24.get_order_detail_link(order_id) for order_id in order_ids)
-order_pages = (Yes24.open_url(opener, url) for url  in order_urls)
-results     = (Order.PageParse.parse(text) for text in order_pages)
+#order_ids   = (order.id for order in orders)
+#order_urls  = (order.page_url() for order in orders)
+#order_pages = (Yes24.open_url(opener, url) for url  in order_urls)
+#results     = (Order.PageParse.parse(text) for text in order_pages)
+[order.set_payment(opener) for order in orders]
 
-for order_price, point_saved, payment_method, money_spent, discounts in results:
+for order in orders:
+    payment = order.payment
     print ' *',
-    if len(discounts) > 0:
-        if money_spent != u'0':
-            print u"%s원(%s %s원" % (order_price, payment_method, money_spent), 
+    if len(payment.discounts) > 0:
+        print u"%s원" % payment.price, 
+        if payment.cash_paid != u'0':
+            print u"(%s %s원" % (payment.method, payment.cash_paid), 
         else:
-            print u"%s원(%s원" % (order_price, money_spent), 
-        for discount_by, discount_amt in discounts:
+            print u"(%s원" % payment.cash_paid, 
+        for discount_by, discount_amt in payment.discounts:
             print u"+ %s %s원"  % (discount_by.strip(), discount_amt),
-        print u")/ %s점 적립" % (point_saved)
+        print u")/ %s점 적립" % (payment.point_saved)
     else:
-        print u"%s원 / %s점 적립" % (order_price, point_saved)
+        print u"%s원 / %s점 적립" % (payment.price, payment.point_saved)
 
 
