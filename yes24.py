@@ -23,6 +23,10 @@ class Yes24:
         "FBLoginSub:ReturnParams": '',
     }
 
+    # 
+    open_url_count = 0
+    read_bytes = 0
+
     @staticmethod
     def get_order_detail_link(order_id):
         return Yes24.order_detail_url + "?ordNoH=" + order_id
@@ -31,19 +35,21 @@ class Yes24:
     def get_deliver_state_link(order_id):
         return Yes24.default_url + 'Order/FTDelvTrcListFrame.aspx?OID='+order_id+"&TTL=L"
 
-    @staticmethod
-    def open_url(opener, url):
+    @classmethod
+    def open_url(cls, opener, url):
         logging.debug('opening url: %s' % url)
         error_count = 3
         for retry_count in range(error_count):
             try:
                 site = opener.open(url)
+                cls.open_url_count += 1
                 break
             except urllib2.URLError, e:
                 logging.error("#%d failed to open url %s, retyring.." % retry_count+1, url)
                 continue
 
         text = site.read()
+        cls.read_bytes += len(text)
         logging.debug('read %d bytes' % len(text))
         return text.decode('cp949')
 
@@ -61,6 +67,11 @@ class Yes24:
         resp = opener.open(Yes24.login_url, urllib.urlencode(Yes24.login_data))
         html = resp.read()
         logging.debug('read %d bytes' % len(html))
+    
+        Yes24.login_data['SMemberID']       = None
+        Yes24.login_data['SMemberPassword'] = None
+        del username, password
+
     
         if 'location.replace' not in html:
             logging.warning('"location.replace" not found in response body. maybe login fail?')
@@ -81,9 +92,8 @@ class Yes24:
 
 class OrderListPage:
     @staticmethod
-    # generator
     def retrieve_order_list_pages(opener, path):
-        ''' yield text of next order list page '''
+        ''' yields text of next order list page '''
         while path is not None:
             text = Yes24.open_url(opener, Yes24.secure_url + path)
             yield text
@@ -91,9 +101,8 @@ class OrderListPage:
             page_no, path = OrderListPage.Parse.navi_info(text)
     
     @staticmethod
-    # generator
     def retrieve_orders(opener, target_month):
-        ''' yield url of order detail page that starts with target date '''
+        ''' yields url of order detail page that starts with target date '''
         start_path = Yes24.order_path
         # order list page iterator
         order_list_page_texts = OrderListPage.retrieve_order_list_pages(opener, start_path)
@@ -108,7 +117,7 @@ class OrderListPage:
 
 
     class Parse:
-        ''' class (more like a namespace) holding methods to help parsing '''
+        ''' a namespace holding methods to help parsing '''
         @staticmethod
         def crop(text):
             start_pattern = '''<div id="ordList"'''
@@ -179,7 +188,7 @@ class Order:
         self.price = None
         self.count = None
         self.title = None
-        self.order_date = None
+        self.date = None
 
         self.payment = None
 
@@ -192,7 +201,7 @@ class Order:
     @classmethod
     def build_from_order_list_page(cls, tr, target_month):
         ''' parse and return Order instance from single table row in order list page
-        returns None if order_date != target_date
+        returns None if date != target_date
         '''
         order = Order()
 
@@ -203,25 +212,26 @@ class Order:
         order.title = tds[2].span.string
         order.price = int( tds[3].b.string.replace(',', '') )
         order.count = int( tds[3].b.string.next.rsplit('/')[-1] )
-        order.order_date = tds[1].string
+        order.date  = tds[1].string
 
         # check target month
         if target_month is not None:
-            if not str(order.order_date).startswith(target_month):
+            if not str(order.date).startswith(target_month):
                 return None
     
         return order
 
 
-    def set_payment(self, opener):
+    def parse_detail_page(self, opener):
         text = Yes24.open_url(opener, self.page_url())
         self.payment = Order.PageParse.parse(text)
         if self.price != self.payment.price:
             logging.warn("price is different: %s vs %s" % (self.price, self.payment.price))
+        return self
 
 
     class PageParse:
-        ''' class (more like a namespace) holding methods to help parsing '''
+        ''' namespace holding methods to help parsing '''
         @staticmethod
         def massage(text):
             # lacks double-quote(")
@@ -255,10 +265,12 @@ class Order:
             text = Order.PageParse.crop(text)
             text = Order.PageParse.massage(text)
             soup = BeautifulSoup(text)
+
+            str2int = lambda x: int(x.replace(",", ""))
         
             # order price
             payment.price = soup.find(id="CLbTotOrdAmt").b.string
-            payment.price = int(payment.price.replace(",", ""))
+            payment.price = str2int(payment.price)
 
             text = ''.join(filter(lambda x: '<span id="CLbPayPrInfo">' in x, text.split("\r\n"))).strip()
             text = '<table>%s</table>' % text[text[1:].find('<')+1:-7]
@@ -266,12 +278,14 @@ class Order:
 
             # points saved
             payment.point_saved = soup.find(attrs={'class':"price"}).b.string
+            payment.point_saved = str2int(payment.point_saved)
 
             # money spent
-            payment.cash_paid = u'0'
+            payment.amount = 0
             priceB_el = soup.find(attrs={'class':"priceB"})
             if priceB_el is not None:
-                payment.cash_paid = priceB_el.string
+                payment.amount = priceB_el.string
+                payment.amount = str2int(payment.amount)
 
             # payment method
             payment.method = None
@@ -279,16 +293,19 @@ class Order:
             if payment_el is not None:
                 payment.method = payment_el.parent.findNextSibling('td').next.replace("&nbsp;", '').strip()
 
-            # discounts
+            # discounts: (name, amount)
             find_discount = lambda tag: tag.name == u'td' and \
                 tag.findNextSibling('td') and \
                 tag.findNextSibling('td').findNextSibling('td') and \
                 tag.findNextSibling('td').findNextSibling('td').b and \
                 tag.findNextSibling('td').findNextSibling('td').b.string != u'0'
             payment.discounts = soup.table.table.table.findAll(find_discount)
-            payment.discounts = map(lambda td: (td.contents[-1], td.findNextSibling('td').findNextSibling('td').b.string), payment.discounts)
+            payment.discounts = map(
+                lambda td: (
+                    td.contents[-1].strip(), 
+                    str2int(td.findNextSibling('td').findNextSibling('td').b.string.strip())
+                ), payment.discounts)
         
-            #return order_price, point_saved, payment_method, cash_paid, discounts
             return payment
 
 
@@ -297,7 +314,7 @@ class Payment:
         self.price  = None
         self.method = None
         self.discounts = None
-        self.cash_paid = None
+        self.amount = None
         self.points_saved = None
 
 
